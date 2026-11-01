@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Observatoire des Votes - Assemblée Nationale</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card-bg: #1e293b;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --accent: #38bdf8;
+      --pour: #22c55e;
+      --contre: #ef4444;
+      --abstention: #f59e0b;
+      --non-votant: #64748b;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); padding: 20px; }
+
+    header { margin-bottom: 24px; text-align: center; }
+    h1 { margin-bottom: 8px; color: var(--accent); }
+
+    nav { display: flex; justify-content: center; gap: 12px; margin-bottom: 24px; }
+    nav button { padding: 10px 18px; border: none; border-radius: 8px; background: var(--card-bg); color: var(--text); font-weight: 600; cursor: pointer; transition: 0.2s; }
+    nav button.active, nav button:hover { background: var(--accent); color: var(--bg); }
+
+    .tab-content { display: none; background: var(--card-bg); padding: 20px; border-radius: 12px; }
+    .tab-content.active { display: block; }
+
+    /* HÉMICYCLE (Sièges) */
+    .hemicycle-container { text-align: center; margin-top: 16px; }
+    .hemicycle { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; max-width: 900px; margin: 20px auto; }
+    .seat { width: 14px; height: 14px; border-radius: 50%; background: var(--non-votant); transition: transform 0.2s; }
+    .seat:hover { transform: scale(1.6); }
+
+    .seat.pour { background: var(--pour); box-shadow: 0 0 6px var(--pour); }
+    .seat.contre { background: var(--contre); box-shadow: 0 0 6px var(--contre); }
+    .seat.abstention { background: var(--abstention); }
+
+    .legend { display: flex; justify-content: center; gap: 16px; margin-top: 12px; font-size: 0.9em; }
+    .legend span { display: flex; align-items: center; gap: 6px; }
+    .dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
+
+    /* LISTES ET CARTES */
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; margin-top: 16px; }
+    .card { background: rgba(255, 255, 255, 0.05); padding: 16px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.1); }
+    
+    select, input { width: 100%; padding: 10px; border-radius: 6px; border: 1px solid var(--muted); background: var(--bg); color: var(--text); margin-bottom: 16px; }
+
+    /* BADGES VOTE */
+    .badge { padding: 4px 8px; border-radius: 4px; font-weight: bold; font-size: 0.8em; text-transform: uppercase; }
+    .badge.pour { background: rgba(34, 197, 94, 0.2); color: var(--pour); }
+    .badge.contre { background: rgba(239, 68, 68, 0.2); color: var(--contre); }
+    .badge.abstention { background: rgba(245, 158, 11, 0.2); color: var(--abstention); }
+  </style>
+</head>
+<body>
+
+  <header>
+    <h1>Observatoire des Votes Assemblée Nationale</h1>
+    <p style="color: var(--muted)">Données issues des API officielles & CLAIR.vote</p>
+  </header>
+
+  <nav>
+    <button class="active" onclick="switchTab('scrutins')">Hémicycle & Votes</button>
+    <button onclick="switchTab('deputes')">Fiche Député</button>
+    <button onclick="switchTab('groupes')">Votes par Groupe</button>
+  </nav>
+
+  <!-- TAB 1: LISTE ET HEMICYCLE -->
+  <section id="scrutins" class="tab-content active">
+    <label for="select-scrutin">Choisissez un scrutin :</label>
+    <select id="select-scrutin" onchange="loadScrutinDetails(this.value)">
+      <option value="">Chargement des scrutins...</option>
+    </select>
+
+    <div id="scrutin-info" style="margin-bottom: 16px;"></div>
+
+    <div class="legend">
+      <span><i class="dot" style="background: var(--pour)"></i> Pour</span>
+      <span><i class="dot" style="background: var(--contre)"></i> Contre</span>
+      <span><i class="dot" style="background: var(--abstention)"></i> Abstention</span>
+      <span><i class="dot" style="background: var(--non-votant)"></i> Non-votant / Absent</span>
+    </div>
+
+    <div class="hemicycle-container">
+      <div id="hemicycle" class="hemicycle"></div>
+    </div>
+  </section>
+
+  <!-- TAB 2: VOTE PAR DÉPUTÉ -->
+  <section id="deputes" class="tab-content">
+    <input type="text" id="search-depute" placeholder="Chercher un député par son nom..." oninput="filterDeputes()">
+    <div id="deputes-list" class="grid"></div>
+  </section>
+
+  <!-- TAB 3: VOTES PAR GROUPE PARLEMENTAIRE -->
+  <section id="groupes" class="tab-content">
+    <h3>Répartition des votes par groupe politique</h3>
+    <div id="groupes-stats" class="grid" style="margin-top: 16px;"></div>
+  </section>
+
+  <script>
+    const API_BASE = "https://api.clair.vote/api/v1";
+    let currentVotes = [];
+    let allDeputes = [];
+
+    // Initialisation
+    document.addEventListener("DOMContentLoaded", () => {
+      fetchScrutins();
+      fetchDeputes();
+    });
+
+    function switchTab(tabId) {
+      document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+      document.querySelectorAll('nav button').forEach(el => el.classList.remove('active'));
+      document.getElementById(tabId).classList.add('active');
+      event.target.classList.add('active');
+    }
+
+    // 1. CHERCHER LA LISTE DES SCRUTINS
+    async function fetchScrutins() {
+      try {
+        const res = await fetch(`${API_BASE}/scrutins`);
+        const data = await res.json();
+        const select = document.getElementById("select-scrutin");
+        select.innerHTML = '<option value="">-- Sélectionnez un vote --</option>';
+
+        const scrutins = data.data || data;
+        scrutins.forEach(s => {
+          const opt = document.createElement("option");
+          opt.value = s.id || s.num_scrutin;
+          opt.textContent = `N°${s.num_scrutin || s.id} - ${s.titre || s.objet}`;
+          select.appendChild(opt);
+        });
+      } catch (err) {
+        console.error("Erreur chargement scrutins:", err);
+      }
+    }
+
+    // 2. AFFICHER HÉMICYCLE ET VOTES PAR GROUPE
+    async function loadScrutinDetails(scrutinId) {
+      if (!scrutinId) return;
+
+      try {
+        const res = await fetch(`${API_BASE}/scrutins/${scrutinId}`);
+        const data = await res.json();
+        
+        const scrutin = data.data || data;
+        currentVotes = scrutin.votes || [];
+
+        // Informations générales
+        document.getElementById("scrutin-info").innerHTML = `
+          <h2>${scrutin.titre || scrutin.objet}</h2>
+          <p style="color: var(--muted); margin-top: 4px;">Résultat: <strong>${scrutin.sort || 'Adopté'}</strong></p>
+        `;
+
+        // Render Hémicycle (577 sièges)
+        renderHemicycle(currentVotes);
+
+        // Render Statistiques par groupe
+        renderGroupStats(currentVotes);
+
+      } catch (err) {
+        console.error("Erreur chargement détail scrutin:", err);
+      }
+    }
+
+    function renderHemicycle(votes) {
+      const container = document.getElementById("hemicycle");
+      container.innerHTML = "";
+
+      // On s'assure d'afficher 577 sièges
+      const votesMap = new Map();
+      votes.forEach(v => votesMap.set(v.depute_id || v.actor_id, v.position));
+
+      for (let i = 0; i < 577; i++) {
+        const seat = document.createElement("div");
+        seat.className = "seat";
+
+        const vote = votes[i];
+        if (vote) {
+          const pos = (vote.position || vote.vote || "").toLowerCase();
+          if (pos.includes("pour")) seat.classList.add("pour");
+          else if (pos.includes("contre")) seat.classList.add("contre");
+          else if (pos.includes("abstention")) seat.classList.add("abstention");
+          
+          seat.title = `${vote.depute_nom || 'Député'} (${vote.groupe || 'Groupe'}) : ${vote.position}`;
+        }
+
+        container.appendChild(seat);
+      }
+    }
+
+    // 3. VOTES PAR GROUPE PARLEMENTAIRE
+    function renderGroupStats(votes) {
+      const container = document.getElementById("groupes-stats");
+      container.innerHTML = "";
+
+      const groups = {};
+
+      votes.forEach(v => {
+        const grp = v.groupe || v.groupe_abrev || "Non-inscrits";
+        if (!groups[grp]) groups[grp] = { pour: 0, contre: 0, abstention: 0 };
+        
+        const pos = (v.position || "").toLowerCase();
+        if (pos.includes("pour")) groups[grp].pour++;
+        else if (pos.includes("contre")) groups[grp].contre++;
+        else if (pos.includes("abstention")) groups[grp].abstention++;
+      });
+
+      Object.entries(groups).forEach(([grp, stats]) => {
+        const card = document.createElement("div");
+        card.className = "card";
+        card.innerHTML = `
+          <h4>${grp}</h4>
+          <div style="margin-top: 8px; display: flex; gap: 8px;">
+            <span class="badge pour">Pour: ${stats.pour}</span>
+            <span class="badge contre">Contre: ${stats.contre}</span>
+            <span class="badge abstention">Abs: ${stats.abstention}</span>
+          </div>
+        `;
+        container.appendChild(card);
+      });
+    }
+
+    // 4. MODULE DÉPUTÉS
+    async function fetchDeputes() {
+      try {
+        const res = await fetch(`${API_BASE}/deputes`);
+        const data = await res.json();
+        allDeputes = data.data || data;
+        filterDeputes();
+      } catch (err) {
+        console.error("Erreur chargement députés:", err);
+      }
+    }
+
+    function filterDeputes() {
+      const query = document.getElementById("search-depute").value.toLowerCase();
+      const container = document.getElementById("deputes-list");
+      container.innerHTML = "";
+
+      const filtered = allDeputes.filter(d => 
+        `${d.prenom} ${d.nom}`.toLowerCase().includes(query)
+      ).slice(0, 12); // Limité à 12 résultats pour la performance
+
+      filtered.forEach(d => {
+        // Recherche du vote du député sur le scrutin en cours
+        const lastVote = currentVotes.find(v => (v.depute_id || v.actor_id) === d.id);
+        const votePos = lastVote ? lastVote.position : "Pas de vote récent chargé";
+
+        const card = document.createElement("div");
+        card.className = "card";
+        card.innerHTML = `
+          <h3>${d.prenom} ${d.nom}</h3>
+          <p style="color: var(--accent); font-size: 0.9em; margin-bottom: 8px;">${d.groupe || d.groupe_abrev || 'Groupe N.C'}</p>
+          <p style="font-size: 0.85em;">Dernier vote sélectionné :</p>
+          <span class="badge ${getBadgeClass(votePos)}">${votePos}</span>
+        `;
+        container.appendChild(card);
+      });
+    }
+
+    function getBadgeClass(pos) {
+      const p = pos.toLowerCase();
+      if (p.includes("pour")) return "pour";
+      if (p.includes("contre")) return "contre";
+      if (p.includes("abstention")) return "abstention";
+      return "";
+    }
+  </script>
+</body>
+</html>
